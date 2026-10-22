@@ -1,0 +1,106 @@
+# Continuous generation: each job ~16 accounts on one IP.
+# On rate_limit → exit → this workflow re-queues itself on a new runner (new IP).
+
+name: Generate accounts
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_accounts:
+        description: "Max accounts this job (default 16 = per-IP soft cap)"
+        required: false
+        default: "16"
+      ref_url:
+        description: "Referral URL (blank = default)"
+        required: false
+        default: ""
+  schedule:
+    # safety net if re-queue misses — every 30 min
+    - cron: "*/30 * * * *"
+  # allow this workflow to trigger itself
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: katabump-gen
+  # do not cancel the running job when a new one is queued
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm i
+
+      - name: Install Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Egress IP
+        run: |
+          echo -n "IP: "
+          curl -sS --max-time 10 https://api.ipify.org || true
+          echo
+
+      - name: Generate (loop until rate_limit or max)
+        id: gen
+        env:
+          PAX_API_KEY: "sk-paxsenix-k1rx9mK2OICDy_9tF3YweX_ZDxYZYH1yy8ah8SfOToPeJl_S"
+          GEMINI_API_KEY: "AQ.Ab8RN6JEDE0wJsJwL-rljpaAS4awSACxdEJ-aAJyWIrbiTQcZQ"
+          GEMINI_MODEL: "gemini-3.5-flash-lite"
+          REF_URL: "https://rl.katabump.fr/2aea34"
+          LOOP_DELAY_MS: "45000"
+          RATE_LIMIT_BACKOFF_MS: "300000"
+          MAX_ACCOUNTS: ${{ github.event.inputs.max_accounts || '16' }}
+        run: |
+          set -e
+          REF="${{ github.event.inputs.ref_url }}"
+          if [ -z "$REF" ]; then
+            REF="${REF_URL:-https://rl.katabump.fr/2aea34}"
+          fi
+          mkdir -p out
+          echo "REF=$REF MAX_ACCOUNTS=$MAX_ACCOUNTS"
+          # do not fail the step on script exit — we handle rate_limit below
+          set +e
+          npx tsx index.ts "$REF" 2>&1 | tee out/run.log
+          set -e
+          grep -E '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:.+$' out/run.log \
+            > out/accounts.txt || true
+          echo "=== accounts ==="
+          cat out/accounts.txt || true
+          if [ -f out/rate_limited ] || grep -q "error=rate_limit\|Rate limited" out/run.log; then
+            echo "rate_limited=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rate_limited=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: katabump-${{ github.run_id }}
+          path: out/
+          retention-days: 14
+
+      - name: Spawn new runner (new IP) after rate_limit
+        if: steps.gen.outputs.rate_limited == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Rate limited — dispatching a new workflow run for a fresh runner IP"
+          # small delay so concurrency does not fight the current job cleanup
+          sleep 15
+          gh workflow run "Generate accounts" --repo "$GITHUB_REPOSITORY" -f max_accounts=16 || \
+          gh workflow run generate.yml --repo "$GITHUB_REPOSITORY" -f max_accounts=16
+          echo "Re-queued."
