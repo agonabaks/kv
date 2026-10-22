@@ -57,7 +57,7 @@ jobs:
         id: gen
         env:
           PAX_API_KEY: "sk-paxsenix-k1rx9mK2OICDy_9tF3YweX_ZDxYZYH1yy8ah8SfOToPeJl_S"
-          GEMINI_API_KEY: "AQ.Ab8RN6JEDE0wJsJwL-rljpaAS4awSACxdEJ-aAJyWIrbiTQcZQ"
+          GEMINI_API_KEY: "AQ.Ab8RN6Lt7ScCMB5Nd_M5PAqtkSaloMdda1L6OiS9ZPjXRh1Rfg"
           GEMINI_MODEL: "gemini-3.5-flash-lite"
           REF_URL: "https://rl.katabump.fr/2aea34"
           LOOP_DELAY_MS: "45000"
